@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import json
-import os
 import random
-import textwrap
+import sqlite3
 import time
 import traceback
 
@@ -15,129 +14,107 @@ class ImagePostException(Exception):
     pass
 
 
-class ImageArchiveException(Exception):
-    pass
-
-
 REQUIRED_FIELDS = set(
-    'captions_file',
-    'photo_directory',
-    'used_captions_file',
-    'uploaded_directory',
+    'db_file',
     'twitter_api_key',
     'twitter_api_secret',
+    'twitter_access_token',
+    'twitter_access_secret',
 )
 
 
 def log_error(error_message: str) -> None:
     print(
-        textwrap.dedent("""
-            Failed to upload an image.
-
-            * Traceback:
-            {error_message}
-
-            * Timestamp: {timestamp}
-        """).format(
-            image=image,
-            error_message=error_message,
+        'Failed to upload an image. Timestamp: {timestamp}. Traceback: {error_message}'.format(
             timestamp=time.time(),
+            error_message=error_message,
         ),
     )
 
 
-def log_success(image: str, twitter_post: str) -> None:
+def log_success(image_id: int, twitter_post: str) -> None:
     print(
-        textwrap.dedent("""
-            Successfully uploaded {image} to Twitter.
-
-            * Timestamp: {timestamp}
-            * Twitter URL: {twitter_post}
-        """).format(
-            image=image,
+        'Successfully uploaded {image_id} to Twitter. Timestamp: {timestamp}. URL: {twitter_post}'.format(
+            image_id=image_id,
             timestamp=time.time(),
             twitter_post=twitter_post,
         ),
     )
 
 
-
-def upload_image(image_path: str, oauth: Any) -> int:
-    """Read this for the algorithm - don't read this for pretty code.
-    """
-    __, image_extension = os.path.splitext(os.path.basename(image_path))
+def upload_image(path: str, oauth: OAuth1)
+    __, image_extension = os.path.splitext(os.path.basename(path))
     mime_type = {
         'png': 'image/png',
         'jpg': 'image/jpeg',
         'jpeg': 'image/jpeg',
     }[image_extension.lower()]
-    image_size = os.path.getsize(image_path)
+    image_size = os.path.getsize(path)
 
-    init_result = requests.post(
+    init_params = {
+        'command': 'INIT',
+        'total_bytes': image_size,
+        'media_type': mime_type,
+        'media_category': 'tweet_image',
+    }
+    result = requests.post(
         'https://upload.twitter.com/1.1/media/upload.json',
-        data={
-            command='INIT',
-            media_type=mime_type,
-            total_bytes=image_size,
-        },
+        data=init_params,
         auth=oauth,
-    ).json()
-    media_id = init_result['media_id']
+    )
+    result.raise_for_status()
+    media_id = result.json()['media_id']
 
-    with open(image_path, mode='rb') as f:
-        for chunk_num in range(2):
-            chunk = f.read((image_size / 2) + 1)
-            upload_result = requests.post(
+    with open(path, mode='rb') as f:
+        chunk_num = 0
+        while f.tell() < image_size:
+            current_chunk = f.read(3*1024*1024)
+            append_params = {
+                'command': 'APPEND',
+                'media_id': media_id,
+                'segment_index': chunk_num,
+            }
+            append_files = {'media': current_chunk}
+            result = requests.post(
                 'https://upload.twitter.com/1.1/media/upload.json',
-                data={
-                    command='APPEND',
-                    media_id=media_id,
-                    segment_id=0,
-                },
-                files={
-                    'media': chunk,
-                },
+                data=append_params,
+                files=append_files,
                 auth=oauth,
             )
 
-            if (
-                upload_result.status_code < 200
-                or upload_result.status_code > 299
-            ):
-                raise ImagePostException(
-                    f'Failed to upload chunk {chunk_num} - error code {upload_result.status_code}'
-                )
+            result.raise_for_status()
+            chunk_num = chunk_num + 1
 
-    finalize_result = requests.post(
+    finalize_params = {
+        'command': 'FINALIZE',
+        'media_id': media_id,
+    }
+    result = requests.post(
         'https://upload.twitter.com/1.1/media/upload.json',
-        data={
-            command='FINALIZE',
-            media_id=media_id,
-        },
+        data=finalize_params,
+        auth=oauth,
+    )
+    result.raise_for_status()
+
+    # according to Twitter docs the processing_info field is only applicable for videos
+    return media_id
+
+
+def post_tweet(caption: str, image_id: str, oauth: OAuth1):
+    params = {
+        'status': caption,
+        'media_ids': image_id,
+        'display_coordinates': 'false',
+    }
+    response = requests.post(
+        'https://api.twitter.com/1.1/statuses/update.json',
+        data=params,
         auth=oauth,
     ).json()
 
-    if finalize_result.get('processing_info')
-        start_time = time.time()
-        while time.time() - start_time < 60:
-            if finalize_result['processing_info']['state'] != 'pending':
-                break
+    url = f'https://twitter.com/i/web/status/{response['id']}'
+    return url
 
-            time.sleep(finalize_result['processing_info']['check_after_secs'] + 0.2)
-
-            finalize_result = requests.get(
-                'https://upload.twitter.com/1.1/media/upload.json',
-                params={
-                    'command': 'STATUS',
-                    'media_id': media_id,
-                },
-            ).json()
-
-    if finalize_result.get('processing_info') != 'succeeded':
-        raise ImagePostException
-
-    return media_id
-        
 
 def main() -> int:
     with open('config.json', encoding='utf-8') as f:
@@ -149,36 +126,34 @@ def main() -> int:
         return 1
 
     secure_random = random.SystemRandom()
+    db_cursor = sqlite3.connect(config['db_file']).cursor()
 
-    images_to_upload = os.listdir(config['photo_directory'])
-    image_path = secure_random.choice(images_to_upload)
-    try:
-        image_key = os.path.basename(image_path)
+    images_to_upload = db_cursor.execute("SELECT id, path, caption from image WHERE uploaded = 0")
+    img_id, path, caption = secure_random.choice(images_to_upload)
 
-        with open(config['captions_file'], encoding='utf-8') as f:
-            caption = json.loads(f.read())[image_key]
+    if os.path.getsize(path) > 5 * 1024 * 1024:
+        raise ImagePostException(f'{img_id} is too big. Size: {os.path.getsize(path)}')
 
-        image_id = upload_image(
-            image_path,
-            oauth,
-        )
-        twitter_post = create_tweet(
-            caption,
-            image_id,
-        )
-    except Exception as e:
-        raise ImagePostException(f'Failed to upload {image} to Twitter') from e
+    if len(caption) > 280:
+        raise ImagePostException(f"{img_id}'s caption is too long.")
+
+    oauth = OAuth1(
+        config['twitter_api_key'],
+        client_secret=config['twitter_api_secret'],
+        resource_owner_key=config['twitter_access_token'],
+        resource_owner_secret=config['twitter_access_secret'],
+    )
 
     try:
-        archive_image(
-            image_path,
-            image_key,
-            config['captions_file'],
-            config['used_captions_file'],
-            config['uploaded_directory'],
-        )
+        image_id = upload_image(path, oauth)
+        twitter_post = post_tweet(caption, image_id, oauth)
     except Exception as e:
-        raise ImageArchiveException(f'Failed to upload {image} to Twitter') from e
+        raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
+
+    try:
+        db_cursor.execute('UPDATE image SET uploaded = 1 WHERE id = ?', (img_id,))
+    except Exception as e:
+        raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
 
     log_success(image, twitter_post)
 
