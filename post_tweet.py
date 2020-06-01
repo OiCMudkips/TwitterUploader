@@ -7,6 +7,9 @@ import textwrap
 import time
 import traceback
 
+import requests
+from requests_oauthlib import OAuth1
+
 
 class ImagePostException(Exception):
     pass
@@ -58,6 +61,84 @@ def log_success(image: str, twitter_post: str) -> None:
     )
 
 
+
+def upload_image(image_path: str, oauth: Any) -> int:
+    """Read this for the algorithm - don't read this for pretty code.
+    """
+    __, image_extension = os.path.splitext(os.path.basename(image_path))
+    mime_type = {
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+    }[image_extension.lower()]
+    image_size = os.path.getsize(image_path)
+
+    init_result = requests.post(
+        'https://upload.twitter.com/1.1/media/upload.json',
+        data={
+            command='INIT',
+            media_type=mime_type,
+            total_bytes=image_size,
+        },
+        auth=oauth,
+    ).json()
+    media_id = init_result['media_id']
+
+    with open(image_path, mode='rb') as f:
+        for chunk_num in range(2):
+            chunk = f.read((image_size / 2) + 1)
+            upload_result = requests.post(
+                'https://upload.twitter.com/1.1/media/upload.json',
+                data={
+                    command='APPEND',
+                    media_id=media_id,
+                    segment_id=0,
+                },
+                files={
+                    'media': chunk,
+                },
+                auth=oauth,
+            )
+
+            if (
+                upload_result.status_code < 200
+                or upload_result.status_code > 299
+            ):
+                raise ImagePostException(
+                    f'Failed to upload chunk {chunk_num} - error code {upload_result.status_code}'
+                )
+
+    finalize_result = requests.post(
+        'https://upload.twitter.com/1.1/media/upload.json',
+        data={
+            command='FINALIZE',
+            media_id=media_id,
+        },
+        auth=oauth,
+    ).json()
+
+    if finalize_result.get('processing_info')
+        start_time = time.time()
+        while time.time() - start_time < 60:
+            if finalize_result['processing_info']['state'] != 'pending':
+                break
+
+            time.sleep(finalize_result['processing_info']['check_after_secs'] + 0.2)
+
+            finalize_result = requests.get(
+                'https://upload.twitter.com/1.1/media/upload.json',
+                params={
+                    'command': 'STATUS',
+                    'media_id': media_id,
+                },
+            ).json()
+
+    if finalize_result.get('processing_info') != 'succeeded':
+        raise ImagePostException
+
+    return media_id
+        
+
 def main() -> int:
     with open('config.json', encoding='utf-8') as f:
         config = json.loads(f.read())
@@ -77,11 +158,13 @@ def main() -> int:
         with open(config['captions_file'], encoding='utf-8') as f:
             caption = json.loads(f.read())[image_key]
 
-        twitter_post = upload_image(
+        image_id = upload_image(
             image_path,
+            oauth,
+        )
+        twitter_post = create_tweet(
             caption,
-            config['twitter_api_key'],
-            config['twitter_api_secret'],
+            image_id,
         )
     except Exception as e:
         raise ImagePostException(f'Failed to upload {image} to Twitter') from e
