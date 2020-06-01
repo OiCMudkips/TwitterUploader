@@ -126,9 +126,10 @@ def main() -> int:
         return 1
 
     secure_random = random.SystemRandom()
-    db_cursor = sqlite3.connect(config['db_file']).cursor()
+    db_conn = sqlite3.connect(config['db_file'])
+    db_cursor = db_conn.cursor()
 
-    images_to_upload = db_cursor.execute("SELECT id, path, caption from image WHERE uploaded = 0")
+    images_to_upload = db_cursor.execute('SELECT id, path, caption from image WHERE uploaded = 0')
     img_id, path, caption = secure_random.choice(images_to_upload)
 
     if os.path.getsize(path) > 5 * 1024 * 1024:
@@ -152,6 +153,8 @@ def main() -> int:
 
     try:
         db_cursor.execute('UPDATE image SET uploaded = 1 WHERE id = ?', (img_id,))
+        db_conn.commit()
+        db_conn.close()
     except Exception as e:
         raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
 
