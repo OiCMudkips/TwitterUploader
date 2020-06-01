@@ -1,2 +1,4 @@
 db.db
 config.json
+virtualenv_run
+__pycache__

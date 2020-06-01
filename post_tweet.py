@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import json
+import os
 import random
 import sqlite3
+import sys
 import time
 import traceback
 
@@ -14,13 +16,13 @@ class ImagePostException(Exception):
     pass
 
 
-REQUIRED_FIELDS = set(
+REQUIRED_FIELDS = set([
     'db_file',
     'twitter_api_key',
     'twitter_api_secret',
     'twitter_access_token',
     'twitter_access_secret',
-)
+])
 
 
 def log_error(error_message: str) -> None:
@@ -45,9 +47,9 @@ def log_success(image_id: int, twitter_post: str) -> None:
 def upload_image(path: str, oauth: OAuth1):
     __, image_extension = os.path.splitext(os.path.basename(path))
     mime_type = {
-        'png': 'image/png',
-        'jpg': 'image/jpeg',
-        'jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
     }[image_extension.lower()]
     image_size = os.path.getsize(path)
 
@@ -129,8 +131,8 @@ def main() -> int:
     db_conn = sqlite3.connect(config['db_file'])
     db_cursor = db_conn.cursor()
 
-    images_to_upload = db_cursor.execute('SELECT id, path, caption from image WHERE uploaded = 0')
-    img_id, path, caption = secure_random.choice(images_to_upload)
+    db_cursor.execute('SELECT id, path, caption from image WHERE uploaded = 0')
+    img_id, path, caption = secure_random.choice(db_cursor.fetchall())
 
     if os.path.getsize(path) > 5 * 1024 * 1024:
         raise ImagePostException(f'{img_id} is too big. Size: {os.path.getsize(path)}')
@@ -146,8 +148,8 @@ def main() -> int:
     )
 
     try:
-        image_id = upload_image(path, oauth)
-        twitter_post = post_tweet(caption, image_id, oauth)
+        twitter_image_id = upload_image(path, oauth)
+        twitter_post = post_tweet(caption, twitter_image_id, oauth)
     except Exception as e:
         raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
 
@@ -158,12 +160,12 @@ def main() -> int:
     except Exception as e:
         raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
 
-    log_success(image, twitter_post)
+    log_success(img_id, twitter_post)
 
 
 if __name__ == '__main__':
     try:
-        return main()
+        main()
     except Exception:
         log_error(traceback.format_exc())
-        return 1
+        sys.exit(1)
