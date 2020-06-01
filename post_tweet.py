@@ -42,7 +42,7 @@ def log_success(image_id: int, twitter_post: str) -> None:
     )
 
 
-def upload_image(path: str, oauth: OAuth1)
+def upload_image(path: str, oauth: OAuth1):
     __, image_extension = os.path.splitext(os.path.basename(path))
     mime_type = {
         'png': 'image/png',
@@ -112,7 +112,7 @@ def post_tweet(caption: str, image_id: str, oauth: OAuth1):
         auth=oauth,
     ).json()
 
-    url = f'https://twitter.com/i/web/status/{response['id']}'
+    url = f"https://twitter.com/i/web/status/{response['id']}"
     return url
 
 
