@@ -119,13 +119,13 @@ def post_tweet(caption: str, image_id: str, oauth: OAuth1):
 
 
 def main() -> int:
-    with open('config.json', encoding='utf-8') as f:
+    config_file = sys.argv[1]
+    with open(config_file, encoding='utf-8') as f:
         config = json.loads(f.read())
 
     missing_fields = REQUIRED_FIELDS - set(config.keys())
     if missing_fields:
-        log_error(f'Missing fields in config: {missing_fields}')
-        return 1
+        raise ImagePostException(f'Missing fields in config: {missing_fields}')
 
     secure_random = random.SystemRandom()
     db_conn = sqlite3.connect(config['db_file'])
@@ -161,11 +161,12 @@ def main() -> int:
         raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
 
     log_success(img_id, twitter_post)
+    return 0
 
 
 if __name__ == '__main__':
     try:
-        main()
+        sys.exit(main())
     except Exception:
         log_error(traceback.format_exc())
         sys.exit(1)
