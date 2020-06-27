@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import functools
 import json
 import os
+<<<<<<< HEAD
 import random
 import sqlite3
 import sys
+=======
+import posixpath
+import random
+import sqlite3
+import sys
+import tempfile
+>>>>>>> support s3 file store in post_tweet.py
 import time
 import traceback
+import typing
 
+import boto3
 import requests
 from requests_oauthlib import OAuth1
 
@@ -17,7 +28,12 @@ class ImagePostException(Exception):
 
 
 REQUIRED_FIELDS = set([
+<<<<<<< HEAD
     'db_file',
+=======
+    'db_bucket',
+    'db_path',
+>>>>>>> support s3 file store in post_tweet.py
     'twitter_api_key',
     'twitter_api_secret',
     'twitter_access_token',
@@ -44,14 +60,32 @@ def log_success(image_id: int, twitter_post: str) -> None:
     )
 
 
-def upload_image(path: str, oauth: OAuth1):
-    __, image_extension = os.path.splitext(os.path.basename(path))
+@functools.lru_cache(maxsize=1)
+def get_s3_client():
+    return boto3.Session(profile_name='s3').client('s3')
+
+
+def get_s3_file(bucket_name: str, bucket_path: str, output_file: typing.BinaryIO) -> typing.BinaryIO:
+    client = get_s3_client()
+    client.download_fileobj(Bucket=bucket_name, Key=bucket_path, Fileobj=output_file)
+    return output_file
+
+
+def upload_s3_file(bucket_name: str, bucket_path: str, upload_file: typing.BinaryIO):
+    upload_file.seek(0)
+
+    client = get_s3_client()
+    client.upload_fileobj(Fileobj=upload_file, Bucket=bucket_name, Key=bucket_path)
+
+
+def upload_image_to_twitter(image_name: str, image_path: str, image_file: typing.BinaryIO, oauth: OAuth1):
+    __, image_extension = posixpath.splitext(image_name)
     mime_type = {
         '.png': 'image/png',
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',
     }[image_extension.lower()]
-    image_size = os.path.getsize(path)
+    image_size = os.path.getsize(image_path)
 
     init_params = {
         'command': 'INIT',
@@ -67,25 +101,24 @@ def upload_image(path: str, oauth: OAuth1):
     result.raise_for_status()
     media_id = result.json()['media_id']
 
-    with open(path, mode='rb') as f:
-        chunk_num = 0
-        while f.tell() < image_size:
-            current_chunk = f.read(3*1024*1024)
-            append_params = {
-                'command': 'APPEND',
-                'media_id': media_id,
-                'segment_index': chunk_num,
-            }
-            append_files = {'media': current_chunk}
-            result = requests.post(
-                'https://upload.twitter.com/1.1/media/upload.json',
-                data=append_params,
-                files=append_files,
-                auth=oauth,
-            )
+    chunk_num = 0
+    while image_file.tell() < image_size:
+        current_chunk = image_file.read(3*1024*1024)
+        append_params = {
+            'command': 'APPEND',
+            'media_id': media_id,
+            'segment_index': chunk_num,
+        }
+        append_files = {'media': current_chunk}
+        result = requests.post(
+            'https://upload.twitter.com/1.1/media/upload.json',
+            data=append_params,
+            files=append_files,
+            auth=oauth,
+        )
 
-            result.raise_for_status()
-            chunk_num = chunk_num + 1
+        result.raise_for_status()
+        chunk_num = chunk_num + 1
 
     finalize_params = {
         'command': 'FINALIZE',
@@ -127,42 +160,54 @@ def main() -> int:
     if missing_fields:
         raise ImagePostException(f'Missing fields in config: {missing_fields}')
 
-    secure_random = random.SystemRandom()
-    db_conn = sqlite3.connect(config['db_file'])
+    db_file = get_s3_file(config["db_bucket"], config["db_path"], tempfile.NamedTemporaryFile(delete=False))
+    db_file_name = db_file.name
+    db_file.close() # Windows cannot open the same file twice, so we have to close this open file before opening it again in sqlite3.
+
+    db_conn = sqlite3.connect(db_file_name)
     db_cursor = db_conn.cursor()
 
-    db_cursor.execute('SELECT id, path, caption from image WHERE uploaded = 0')
-    img_id, path, caption = secure_random.choice(db_cursor.fetchall())
-
-    if os.path.getsize(path) > 5 * 1024 * 1024:
-        raise ImagePostException(f'{img_id} is too big. Size: {os.path.getsize(path)}')
+    images_to_upload = db_cursor.execute('SELECT id, bucket_name, bucket_path, caption from image2 WHERE uploaded = 0').fetchall()
+    img_id, img_bucket_name, img_bucket_path, caption = random.SystemRandom().choice(images_to_upload)
 
     if len(caption) > 280:
         raise ImagePostException(f"{img_id}'s caption is too long.")
 
     oauth = OAuth1(
         config['twitter_api_key'],
-        client_secret=config['twitter_api_secret'],
-        resource_owner_key=config['twitter_access_token'],
-        resource_owner_secret=config['twitter_access_secret'],
+        config['twitter_api_secret'],
+        config['twitter_access_token'],
+        config['twitter_access_secret'],
     )
 
     try:
-        twitter_image_id = upload_image(path, oauth)
+        image_name = posixpath.basename(img_bucket_path)
+        image_file = get_s3_file(
+            img_bucket_name, img_bucket_path, tempfile.NamedTemporaryFile(),
+        )
+        image_file.seek(0)
+        image_path = image_file.name
+
+        twitter_image_id = upload_image_to_twitter(image_name, image_path, image_file, oauth)
         twitter_post = post_tweet(caption, twitter_image_id, oauth)
+
+        image_file.close()
     except Exception as e:
         raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
 
     try:
-        db_cursor.execute('UPDATE image SET uploaded = 1 WHERE id = ?', (img_id,))
+        db_cursor.execute('UPDATE image2 SET uploaded = 1 WHERE id = ?', (img_id,))
         db_conn.commit()
         db_conn.close()
+        with open(db_file_name, 'rb') as db_file:
+            upload_s3_file(config["db_bucket"], config["db_path"], db_file)
     except Exception as e:
         raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
 
     log_success(img_id, twitter_post)
-    return 0
+    os.remove(db_file_name)
 
+    return 0
 
 if __name__ == '__main__':
     try:
