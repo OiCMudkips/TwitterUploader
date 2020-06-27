@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""Downloads a file from S3 and uploads it to Twitter.
+Reads caption data and sets an image as uploaded in an SQLite database,
+which itself is saved on S3.
+
+I would make this a Lambda but there's literally no way to setup a crontab
+without also using Cloudfront, and I want to limit my exposure to AWS
+services so I guess this will remain a cron task on my website's hosting.
+"""
 import functools
 import json
 import os
