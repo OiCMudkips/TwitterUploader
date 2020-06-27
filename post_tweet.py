@@ -3,17 +3,11 @@
 import functools
 import json
 import os
-<<<<<<< HEAD
-import random
-import sqlite3
-import sys
-=======
 import posixpath
 import random
 import sqlite3
 import sys
 import tempfile
->>>>>>> support s3 file store in post_tweet.py
 import time
 import traceback
 import typing
@@ -28,12 +22,8 @@ class ImagePostException(Exception):
 
 
 REQUIRED_FIELDS = set([
-<<<<<<< HEAD
-    'db_file',
-=======
     'db_bucket',
     'db_path',
->>>>>>> support s3 file store in post_tweet.py
     'twitter_api_key',
     'twitter_api_secret',
     'twitter_access_token',
