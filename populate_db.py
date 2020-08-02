@@ -18,7 +18,7 @@ def main():
         bucket_path = resource['Key']
         if bucket_path.endswith('/'):
             continue
-        db_cursor.execute('INSERT INTO image (bucket, s3_path) VALUES (?,?)', (bucket_name, bucket_path))
+        db_cursor.execute('INSERT INTO image2 (bucket_name, bucket_path) VALUES (?,?)', (bucket_name, bucket_path))
 
     db_conn.commit()
     db_conn.close()
