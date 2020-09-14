@@ -165,7 +165,7 @@ def main() -> int:
     db_conn = sqlite3.connect(db_file_name)
     db_cursor = db_conn.cursor()
 
-    images_to_upload = db_cursor.execute('SELECT id, bucket_name, bucket_path, caption from image2 WHERE uploaded = 0').fetchall()
+    images_to_upload = db_cursor.execute('SELECT id, bucket_name, bucket_path, caption from image2').fetchall()
     img_id, img_bucket_name, img_bucket_path, caption = random.SystemRandom().choice(images_to_upload)
 
     if len(caption) > 280:
@@ -193,14 +193,14 @@ def main() -> int:
     except Exception as e:
         raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
 
-    try:
-        db_cursor.execute('UPDATE image2 SET uploaded = 1 WHERE id = ?', (img_id,))
-        db_conn.commit()
-        db_conn.close()
-        with open(db_file_name, 'rb') as db_file:
-            upload_s3_file(config["db_bucket"], config["db_path"], db_file)
-    except Exception as e:
-        raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
+    # try:
+    #     db_cursor.execute('UPDATE image2 SET uploaded = 1 WHERE id = ?', (img_id,))
+    #     db_conn.commit()
+    #     db_conn.close()
+    #     with open(db_file_name, 'rb') as db_file:
+    #         upload_s3_file(config["db_bucket"], config["db_path"], db_file)
+    # except Exception as e:
+    #     raise ImagePostException(f'Failed to upload {img_id} to Twitter') from e
 
     log_success(img_id, twitter_post)
     os.remove(db_file_name)
