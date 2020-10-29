@@ -167,7 +167,7 @@ def main() -> int:
 
     images_to_upload = db_cursor.execute('SELECT id, bucket_name, bucket_path, caption from image2 WHERE uploaded = 0').fetchall()
     if not images_to_upload:
-        db_cursor.execute('SELECT id, bucket_name, bucket_path, caption from image2').fetchall()
+        images_to_upload = db_cursor.execute('SELECT id, bucket_name, bucket_path, caption from image2').fetchall()
 
     img_id, img_bucket_name, img_bucket_path, caption = random.SystemRandom().choice(images_to_upload)
 
